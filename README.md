@@ -248,7 +248,7 @@ General file structure could look like this:
                 "libraries": [],
                 "max_retries": 0,
                 "spark_python_task": {
-                    "python_file": "sample_project/jobs/sample/entrypoint.py",
+                    "python_file": "sample_project/notebook/sample/entrypoint.py",
                     "parameters": [
                         "--conf-file",
                         "conf/test/sample.json"
