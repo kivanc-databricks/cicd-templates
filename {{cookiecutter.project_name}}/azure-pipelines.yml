@@ -62,7 +62,7 @@ stages:
         DATABRICKS_HOST: $(STAGING_DATABRICKS_HOST)
         DATABRICKS_TOKEN: $(STAGING_DATABRICKS_TOKEN)
       displayName: 'Update Staging project'
-      condition: and(succeeded(), eq('${{ not(startsWith(variables['Build.SourceBranch'], 'refs/pull')) }}', true))
+      condition: and(succeeded(),not(startsWith(variables['Build.SourceBranch'], 'refs/pull')))
 
       #    - script: |
 #        dbx deploy --notebook={{cookiecutter.project_name}}-sample-integration-test --files-only
@@ -82,7 +82,7 @@ stages:
       condition: succeededOrFailed()
       inputs:
         testResultsFormat: 'JUnit'
-        testResultsFiles: '**/test-*.xml' 
+        testResultsFiles: '**/test-*.xml'
         failTaskOnFailedTests: true
 
 - stage: onRelease
@@ -146,5 +146,5 @@ stages:
         condition: succeededOrFailed()
         inputs:
           testResultsFormat: 'JUnit'
-          testResultsFiles: '**/test-*.xml' 
+          testResultsFiles: '**/test-*.xml'
           failTaskOnFailedTests: true
