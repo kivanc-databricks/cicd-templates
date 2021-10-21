@@ -62,7 +62,7 @@ stages:
         DATABRICKS_HOST: $(STAGING_DATABRICKS_HOST)
         DATABRICKS_TOKEN: $(STAGING_DATABRICKS_TOKEN)
       displayName: 'Update Staging project'
-      condition: and(succeeded(),not(startsWith(variables['Build.SourceBranch'], 'refs/pull')))
+      condition: and(succeeded(),startsWith(variables['Build.SourceBranch'], 'refs/heads/developer'))
 
       #    - script: |
 #        dbx deploy --notebook={{cookiecutter.project_name}}-sample-integration-test --files-only
