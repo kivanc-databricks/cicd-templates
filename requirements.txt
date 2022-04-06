@@ -10,3 +10,6 @@ requests
 pynacl
 click
 databricks-cli
+pyspark==3.0.0
+pytest-cov
+dbx

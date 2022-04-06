@@ -1,23 +1,41 @@
+# Grab variables from the specific variable group and
+# determine sourceBranchName (avoids SourchBranchName=merge
+# for PR)
 variables:
-- group: Databricks-environment
+  - group: 'Databricks-environment'
 
 trigger:
   batch: true
   branches:
     include:
     - '*'
-
+  paths:
+    exclude:
+      - README.md
+      - images
+      - terraform
   tags:
     include:
       - v*.*
       - prod
 
+# This need an additional debugging
+# pr:
+#   branches:
+#     include:
+#       - master
+#       - releases
+#   paths:
+#     exclude:
+#       - README.md
+#       - images
+
 stages:
 - stage: onPush
   condition: |
     and(
-       not(startsWith(variables['Build.SourceBranch'], 'refs/heads/releases')),
-       not(startsWith(variables['Build.SourceBranch'], 'refs/tags/v'))
+      ne(variables['Build.SourceBranch'], 'refs/heads/releases'),
+      not(startsWith(variables['Build.SourceBranch'], 'refs/tags/v'))
     )
   jobs:
   - job: onPushJob
@@ -39,44 +57,44 @@ stages:
       displayName: 'Checkout & Build.Reason: $(Build.Reason) & Build.SourceBranchName: $(Build.SourceBranchName)'
 
     - script: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip nutter
+        # this is because of the old dependency inside Nutter
         pip install -r unit-requirements.txt
         pip install -e .
+        python -m pip install --upgrade databricks-cli
       displayName: 'Install dependencies'
 
+# https://docs.databricks.com/dev-tools/api/latest/repos.html
+# this is simplification, and won't work with concurrent commits. Ideally it should be a
+# separate repo for each commit
     - script: |
-        pytest tests/unit --junitxml=test-unit.xml
-      displayName: 'Run Unit tests'
-
-    - script: |
-        set -x
         echo "Checking out the $(Build.SourceBranchName) branch"
-        curl -s -n -X GET -o /tmp/staging-repo-info.json "$DATABRICKS_HOST/api/2.0/workspace/get-status" -H "Authorization: Bearer $DATABRICKS_TOKEN" -d '{"path":"/Repos/Staging/{{cookiecutter.project_name}}"}'
-        cat /tmp/staging-repo-info.json
-        export STAGING_REPOS_ID=$(cat /tmp/staging-repo-info.json|grep '"object_type":"REPO"'|sed -e 's|^.*"object_id":\([0-9]*\).*$|\1|')
-        curl -s -n -X PATCH -o "/tmp/$(Build.SourceBranchName)-out.json" "$DATABRICKS_HOST/api/2.0/repos/$STAGING_REPOS_ID" \
-          -H "Authorization: Bearer $DATABRICKS_TOKEN" -d "{\"branch\": \"$(Build.SourceBranchName)\"}"
-        cat "/tmp/$(Build.SourceBranchName)-out.json"
-        grep -v error_code "/tmp/$(Build.SourceBranchName)-out.json"
+        databricks repos update --path /Repos/Staging/{{cookiecutter.project_name}} --branch "$(Build.SourceBranchName)"
       env:
-        DATABRICKS_HOST: $(STAGING_DATABRICKS_HOST)
-        DATABRICKS_TOKEN: $(STAGING_DATABRICKS_TOKEN)
+        DATABRICKS_HOST: $(DATABRICKS_HOST)
+        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
       displayName: 'Update Staging project'
-      condition: and(succeeded(),startsWith(variables['Build.SourceBranch'], 'refs/heads/developer'))
 
-      #    - script: |
-#        dbx deploy --notebook={{cookiecutter.project_name}}-sample-integration-test --files-only
-#      displayName: 'Deploy integration test'
-#      env:
-#        DATABRICKS_HOST: $(STAGING_DATABRICKS_HOST)
-#        DATABRICKS_TOKEN: $(STAGING_DATABRICKS_TOKEN)
-#
-#    - script: |
-#        dbx launch --job={{cookiecutter.project_name}}-sample-integration-test --as-run-submit --trace
-#      displayName: 'Launch integration on test'
-#      env:
-#        DATABRICKS_HOST: $(STAGING_DATABRICKS_HOST)
-#        DATABRICKS_TOKEN: $(STAGING_DATABRICKS_TOKEN)
+    - script: |
+        nutter run "/Repos/Staging/{{cookiecutter.project_name}}/unit-tests/" --cluster_id $(CLUSTER_ID) --recursive --junit_report --timeout 500
+      env:
+        DATABRICKS_HOST: $(DATABRICKS_HOST)
+        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+      displayName: 'Execute Nutter tests'
+
+    - script: |
+        dbx deploy --environment=staging --jobs={{cookiecutter.project_name}} --files-only
+      displayName: 'Deploy the job'
+      env:
+        DATABRICKS_HOST: $(DATABRICKS_HOST)
+        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+
+    - script: |
+        dbx launch --environment=staging --job={{cookiecutter.project_name}} --as-run-submit --trace
+      displayName: 'Launch job on staging'
+      env:
+        DATABRICKS_HOST: $(DATABRICKS_HOST)
+        DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
     - task: PublishTestResults@2
       condition: succeededOrFailed()
@@ -111,36 +129,36 @@ stages:
         displayName: 'Checkout & Build.Reason: $(Build.Reason) & Build.SourceBranchName: $(Build.SourceBranchName)'
 
       - script: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip nutter
+          # this is because of the old dependency inside Nutter
           pip install -r unit-requirements.txt
           pip install -e .
+          python -m pip install --upgrade databricks-cli
         displayName: 'Install dependencies'
 
       - script: |
-          pytest tests/unit --junitxml=test-unit.xml
-        displayName: 'Run Unit tests'
+          echo "Checking out the releases branch"
+          echo $(Build.SourceBranchName)
+          databricks repos update --path /Repos/Production/{{cookiecutter.project_name}} --tag "$(Build.SourceBranchName)"
+        env:
+          DATABRICKS_HOST: $(DATABRICKS_HOST)
+          DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+        displayName: 'Update Staging repository'
+
+# We can do a separate set of the tests for release branches
+      - script: |
+          nutter run "/Repos/Staging/{{cookiecutter.project_name}}/unit-tests/" --cluster_id $(CLUSTER_ID) --recursive --junit_report --timeout 500
+        env:
+          DATABRICKS_HOST: $(DATABRICKS_HOST)
+          DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+        displayName: 'Execute Nutter tests on release'
 
       - script: |
-          set -x
-          echo "Checking out the master branch"
-          curl -s -n -X GET -o /tmp/prod-repo-info.json "$DATABRICKS_HOST/api/2.0/workspace/get-status" -H "Authorization: Bearer $DATABRICKS_TOKEN" -d '{"path":"/Repos/Production/{{cookiecutter.project_name}}"}'
-          cat /tmp/prod-repo-info.json
-          export PRODUCTION_REPOS_ID=$(cat /tmp/prod-repo-info.json|grep '"object_type":"REPO"'|sed -e 's|^.*"object_id":\([0-9]*\).*$|\1|')
-          curl -s -n -X PATCH -o "/tmp/master-out.json" "$DATABRICKS_HOST/api/2.0/repos/$PRODUCTION_REPOS_ID" \
-            -H "Authorization: Bearer $DATABRICKS_TOKEN" -d "{\"branch\": \"main\"}"
-          cat "/tmp/master-out.json"
-          grep -v error_code "/tmp/master-out.json"
+          dbx deploy --job={{cookiecutter.project_name}} --environment=production
+        displayName: 'Deploy job'
         env:
-          DATABRICKS_HOST: $(PROD_DATABRICKS_HOST)
-          DATABRICKS_TOKEN: $(PROD_DATABRICKS_TOKEN)
-        displayName: 'Update Production repository'
-
-      - script: |
-          dbx deploy --jobs={{cookiecutter.project_name}}-sample
-        displayName: 'Deploy the job'
-        env:
-          DATABRICKS_HOST: $(PROD_DATABRICKS_HOST)
-          DATABRICKS_TOKEN: $(PROD_DATABRICKS_TOKEN)
+          DATABRICKS_HOST: $(DATABRICKS_HOST)
+          DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
 
       - task: PublishTestResults@2
         condition: succeededOrFailed()
